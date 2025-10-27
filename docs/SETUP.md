@@ -146,3 +146,27 @@ Add this image in your README:
 
 📘 **Architecture Diagram (PNG included)**  
 Use the provided image file `AI-QA-Starter-Architecture.png` in your documentation.
+
+---
+
+## 11️⃣ Configure Visual AI (Applitools)
+
+This step is optional. If you don’t set the key, the Visual AI step in CI will be skipped safely.
+
+**Create the repository secret:**
+1. Go to your repo → **Settings** → **Secrets and variables** → **Actions** → **New repository secret**  
+2. Set:
+   - **Name:** `APPLITOOLS_API_KEY`
+   - **Secret:** your real Applitools API key (from https://eyes.applitools.com → avatar → **My API Key**)
+3. Click **Add secret**.
+
+**How the CI uses it**
+- The workflow maps the secret to an environment variable and runs Visual AI only if it’s present:
+  ```yaml
+  env:
+    APPLITOOLS_API_KEY: ${{ secrets.APPLITOOLS_API_KEY }}
+
+  - name: Visual AI (Applitools)
+    if: ${{ env.APPLITOOLS_API_KEY != '' }}
+    run: pytest -q selenium/tests/test_login_visual_ai.py
+
