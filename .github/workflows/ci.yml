@@ -7,6 +7,7 @@ on:
     branches: [ master, develop ]
   workflow_dispatch: {}
 
+# Necesario para publicar en GitHub Pages
 permissions:
   contents: read
   pages: write
@@ -42,27 +43,35 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Install dependencies & Playwright browsers
+      - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt || true
           pip install pytest-html
-          python -m playwright install --with-deps
 
-      - name: Install Google Chrome (for Selenium)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y wget gnupg
-          wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo gpg --dearmor -o /usr/share/keyrings/google-linux-signing-keyring.gpg
-          echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-linux-signing-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
-          sudo apt-get update
-          sudo apt-get install -y google-chrome-stable
-        env:
-          DEBIAN_FRONTEND: noninteractive
+      # Cache de browsers de Playwright (acelera corridas siguientes)
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: ${{ runner.os }}-msplaywright-${{ hashFiles('**/requirements.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-msplaywright-
+
+      # Instala dependencias del sistema + browsers de Playwright de forma optimizada
+      - name: Setup Playwright (deps + browsers)
+        uses: microsoft/playwright-github-action@v1
+
+      # Chrome rápido (evita apt-get pesado)
+      - name: Setup Chrome (fast)
+        uses: browser-actions/setup-chrome@v1
+        with:
+          chrome-version: stable
 
       - name: Lint (Ruff)
         run: ruff check .
 
+      # Levanta FastAPI y espera hasta que responda (loop bash con curl)
       - name: Start FastAPI (background) & wait until ready
         run: |
           nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 > uvicorn.log 2>&1 &
@@ -73,9 +82,10 @@ jobs:
             fi
             sleep 1
           done
+          # falla si no respondió
           curl -sSf http://127.0.0.1:8000 > /dev/null
 
-      # === TESTS + REPORTES HTML/JUnit/XML (para el sitio de reportes) ===
+      # === TESTS + REPORTES HTML (para publicar luego en Pages) ===
       - name: Run tests (Unit + API + E2E) with HTML reports
         run: |
           mkdir -p test-results/html test-results/junit
@@ -83,7 +93,7 @@ jobs:
           pytest -q qa/tests_api  --junitxml=test-results/junit/api.xml  --html=test-results/html/api.html  --self-contained-html
           pytest -q qa/tests_e2e  --junitxml=test-results/junit/e2e.xml  --html=test-results/html/e2e.html  --self-contained-html
 
-      - name: Run Selenium tests with HTML report
+      - name: Selenium (headless) with HTML report
         run: |
           pytest -q selenium/tests/test_login_selenium.py --junitxml=test-results/junit/selenium.xml --html=test-results/html/selenium.html --self-contained-html
 
@@ -121,7 +131,6 @@ jobs:
             <div class="meta">
               Branch: <code>${GITHUB_REF#refs/heads/}</code> • Commit: <code>${GITHUB_SHA}</code>
             </div>
-
             <div class="grid">
               <div class="card"><h3>Unit</h3><a href="./html/unit.html">View report</a></div>
               <div class="card"><h3>API</h3><a href="./html/api.html">View report</a></div>
@@ -129,15 +138,11 @@ jobs:
               <div class="card"><h3>Selenium</h3><a href="./html/selenium.html">View report</a></div>
               <div class="card"><h3>Visual AI</h3><a href="./html/visual-ai.html">View report</a> (if present)</div>
             </div>
-
-            <h2>Artifacts & Logs</h2>
-            <p>Uvicorn log is uploaded as a workflow artifact. JUnit XMLs are available under <code>/junit</code> in the Pages artifact.</p>
           </body>
           </html>
           HTML
           cp -r test-results/html site/html
           cp -r test-results/junit site/junit
-          # opcional: incluir el log del server
           cp uvicorn.log site/ 2>/dev/null || true
 
       - name: Upload logs/artifacts (zip)
