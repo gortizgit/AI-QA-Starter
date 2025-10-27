@@ -5,7 +5,12 @@ on:
     branches: [ master, develop ]
   pull_request:
     branches: [ master, develop ]
-  workflow_dispatch: {}   # permite ejecutar manualmente el pipeline
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -40,11 +45,11 @@ jobs:
       - name: Install dependencies & Playwright browsers
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install -r requirements.txt || true
+          pip install pytest-html
           python -m playwright install --with-deps
 
-      # Instala Google Chrome para Selenium
-      - name: Install Google Chrome
+      - name: Install Google Chrome (for Selenium)
         run: |
           sudo apt-get update
           sudo apt-get install -y wget gnupg
@@ -58,11 +63,9 @@ jobs:
       - name: Lint (Ruff)
         run: ruff check .
 
-      # Levanta FastAPI y espera hasta que responda (sin heredoc)
       - name: Start FastAPI (background) & wait until ready
         run: |
           nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 > uvicorn.log 2>&1 &
-          # esperar hasta 30s a que responda
           for i in {1..30}; do
             if curl -sSf http://127.0.0.1:8000 > /dev/null; then
               echo "Server is up"
@@ -70,32 +73,96 @@ jobs:
             fi
             sleep 1
           done
-          # validar definitivamente (falla el job si no está arriba)
           curl -sSf http://127.0.0.1:8000 > /dev/null
 
-      - name: Unit + API + E2E (Playwright)
+      # === TESTS + REPORTES HTML/JUnit/XML (para el sitio de reportes) ===
+      - name: Run tests (Unit + API + E2E) with HTML reports
         run: |
-          pytest -q qa/tests_unit
-          pytest -q qa/tests_api
-          pytest -q qa/tests_e2e
+          mkdir -p test-results/html test-results/junit
+          pytest -q qa/tests_unit --junitxml=test-results/junit/unit.xml --html=test-results/html/unit.html --self-contained-html
+          pytest -q qa/tests_api  --junitxml=test-results/junit/api.xml  --html=test-results/html/api.html  --self-contained-html
+          pytest -q qa/tests_e2e  --junitxml=test-results/junit/e2e.xml  --html=test-results/html/e2e.html  --self-contained-html
 
-      - name: Selenium (headless)
-        run: pytest -q selenium/tests/test_login_selenium.py
+      - name: Run Selenium tests with HTML report
+        run: |
+          pytest -q selenium/tests/test_login_selenium.py --junitxml=test-results/junit/selenium.xml --html=test-results/html/selenium.html --self-contained-html
 
-      # Corre solo si existe el secret
-      - name: Visual AI (Applitools)
+      - name: Visual AI (Applitools) — optional
         if: ${{ env.APPLITOOLS_API_KEY != '' }}
         env:
           APPLITOOLS_API_KEY: ${{ env.APPLITOOLS_API_KEY }}
-        run: pytest -q selenium/tests/test_login_visual_ai.py
+        run: |
+          pytest -q selenium/tests/test_login_visual_ai.py --junitxml=test-results/junit/visual-ai.xml --html=test-results/html/visual-ai.html --self-contained-html || true
 
-      - name: Upload logs/artifacts
+      - name: Build report site (index.html)
+        run: |
+          mkdir -p site
+          cat > site/index.html <<'HTML'
+          <!doctype html>
+          <html lang="en">
+          <head>
+            <meta charset="utf-8"/>
+            <meta name="viewport" content="width=device-width, initial-scale=1"/>
+            <title>AI-QA-Starter — Test Report</title>
+            <style>
+              body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif; margin:40px; line-height:1.5}
+              h1{margin-bottom:0}
+              .meta{color:#666;margin:4px 0 24px}
+              ul{padding-left:18px}
+              a{color:#0b5fff;text-decoration:none}
+              a:hover{text-decoration:underline}
+              .card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin:12px 0}
+              .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+              code{background:#f6f8fa;padding:2px 6px;border-radius:6px}
+            </style>
+          </head>
+          <body>
+            <h1>AI-QA-Starter — Test Report</h1>
+            <div class="meta">
+              Branch: <code>${GITHUB_REF#refs/heads/}</code> • Commit: <code>${GITHUB_SHA}</code>
+            </div>
+
+            <div class="grid">
+              <div class="card"><h3>Unit</h3><a href="./html/unit.html">View report</a></div>
+              <div class="card"><h3>API</h3><a href="./html/api.html">View report</a></div>
+              <div class="card"><h3>E2E (Playwright)</h3><a href="./html/e2e.html">View report</a></div>
+              <div class="card"><h3>Selenium</h3><a href="./html/selenium.html">View report</a></div>
+              <div class="card"><h3>Visual AI</h3><a href="./html/visual-ai.html">View report</a> (if present)</div>
+            </div>
+
+            <h2>Artifacts & Logs</h2>
+            <p>Uvicorn log is uploaded as a workflow artifact. JUnit XMLs are available under <code>/junit</code> in the Pages artifact.</p>
+          </body>
+          </html>
+          HTML
+          cp -r test-results/html site/html
+          cp -r test-results/junit site/junit
+          # opcional: incluir el log del server
+          cp uvicorn.log site/ 2>/dev/null || true
+
+      - name: Upload logs/artifacts (zip)
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: logs-and-reports
           path: |
             uvicorn.log
-            **/pytest-*.xml
-            **/test-results/*
+            test-results/**
           if-no-files-found: ignore
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  publish-report:
+    name: Publish Web Report (GitHub Pages)
+    needs: test-all
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
