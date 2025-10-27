@@ -5,23 +5,16 @@ on:
     branches: [ master, develop ]
   pull_request:
     branches: [ master, develop ]
-  workflow_dispatch: {}
-
-permissions:
-  contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
-  test-all:
-    name: Lint + Unit + API + E2E (Playwright) + Selenium + VisualAI
-    runs-on: ubuntu-22.04   # ← evita issues de noble/24.04
+  test-and-build:
+    name: Lint + Unit + API + E2E (Playwright) + Selenium (+ Visual AI if key)
+    runs-on: ubuntu-22.04
     timeout-minutes: 45
-
     env:
       APPLITOOLS_API_KEY: ${{ secrets.APPLITOOLS_API_KEY }}
 
@@ -42,133 +35,88 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-pip-
 
-      - name: Install Python dependencies
+      - name: Install deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt || true
-          pip install pytest-html
-          # asegúrate de tener playwright instalado (por si no está en requirements.txt)
-          pip install playwright
+          pip install -r requirements.txt
 
-      # Cache de browsers Playwright (evita re-descargas en runs siguientes)
-      - name: Cache Playwright browsers
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/ms-playwright
-          key: ${{ runner.os }}-msplaywright-${{ hashFiles('**/requirements.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-msplaywright-
-
-      # Instalar browsers y deps del sistema con el CLI oficial (soportado)
-      - name: Install Playwright browsers (CLI)
-        run: |
-          python -m playwright install --with-deps
-
-      # Chrome rápido (sin apt pesado)
-      - name: Setup Chrome (fast)
-        uses: browser-actions/setup-chrome@v1
-        with:
-          chrome-version: stable
+      - name: Install Playwright browsers
+        run: python -m playwright install --with-deps
 
       - name: Lint (Ruff)
         run: ruff check .
 
-      # Levanta FastAPI y espera hasta que responda (loop bash con curl)
-      - name: Start FastAPI (background) & wait until ready
+      - name: Start FastAPI (background)
         run: |
           nohup uvicorn app.main:app --host 127.0.0.1 --port 8000 > uvicorn.log 2>&1 &
-          for i in {1..30}; do
-            if curl -sSf http://127.0.0.1:8000 > /dev/null; then
-              echo "Server is up"
-              break
-            fi
+          for i in {1..20}; do
+            if curl -fsS http://127.0.0.1:8000 >/dev/null; then echo "Server up"; break; fi
             sleep 1
           done
-          curl -sSf http://127.0.0.1:8000 > /dev/null
 
-      # === TESTS + REPORTES HTML (para publicar luego en Pages) ===
-      - name: Run tests (Unit + API + E2E) with HTML reports
+      - name: Run tests — Unit + API + E2E (Playwright)
         run: |
-          mkdir -p test-results/html test-results/junit
-          pytest -q qa/tests_unit --junitxml=test-results/junit/unit.xml --html=test-results/html/unit.html --self-contained-html
-          pytest -q qa/tests_api  --junitxml=test-results/junit/api.xml  --html=test-results/html/api.html  --self-contained-html
-          pytest -q qa/tests_e2e  --junitxml=test-results/junit/e2e.xml  --html=test-results/html/e2e.html  --self-contained-html
+          pytest -q qa/tests_unit
+          pytest -q qa/tests_api
+          pytest -q qa/tests_e2e
 
-      - name: Selenium (headless) with HTML report
-        run: |
-          pytest -q selenium/tests/test_login_selenium.py --junitxml=test-results/junit/selenium.xml --html=test-results/html/selenium.html --self-contained-html
+      - name: Run tests — Selenium
+        run: pytest -q selenium/tests/test_login_selenium.py
 
-      - name: Visual AI (Applitools) — optional
+      - name: Run tests — Visual AI (Applitools)
         if: ${{ env.APPLITOOLS_API_KEY != '' }}
         env:
           APPLITOOLS_API_KEY: ${{ env.APPLITOOLS_API_KEY }}
-        run: |
-          pytest -q selenium/tests/test_login_visual_ai.py --junitxml=test-results/junit/visual-ai.xml --html=test-results/html/visual-ai.html --self-contained-html || true
+        run: pytest -q selenium/tests/test_login_visual_ai.py
 
-      - name: Build report site (index.html)
+      - name: Prepare web report (public/)
         run: |
-          mkdir -p site
-          cat > site/index.html <<'HTML'
-          <!doctype html>
-          <html lang="en">
-          <head>
-            <meta charset="utf-8"/>
-            <meta name="viewport" content="width=device-width, initial-scale=1"/>
-            <title>AI-QA-Starter — Test Report</title>
-            <style>
-              body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif; margin:40px; line-height:1.5}
-              h1{margin-bottom:0}
-              .meta{color:#666;margin:4px 0 24px}
-              ul{padding-left:18px}
-              a{color:#0b5fff;text-decoration:none}
-              a:hover{text-decoration:underline}
-              .card{border:1px solid #e5e7eb;border-radius:12px;padding:16px;margin:12px 0}
-              .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
-              code{background:#f6f8fa;padding:2px 6px;border-radius:6px}
-            </style>
-          </head>
-          <body>
-            <h1>AI-QA-Starter — Test Report</h1>
-            <div class="meta">
-              Branch: <code>${GITHUB_REF#refs/heads/}</code> • Commit: <code>${GITHUB_SHA}</code>
-            </div>
-            <div class="grid">
-              <div class="card"><h3>Unit</h3><a href="./html/unit.html">View report</a></div>
-              <div class="card"><h3>API</h3><a href="./html/api.html">View report</a></div>
-              <div class="card"><h3>E2E (Playwright)</h3><a href="./html/e2e.html">View report</a></div>
-              <div class="card"><h3>Selenium</h3><a href="./html/selenium.html">View report</a></div>
-              <div class="card"><h3>Visual AI</h3><a href="./html/visual-ai.html">View report</a> (if present)</div>
-            </div>
-          </body>
-          </html>
-          HTML
-          cp -r test-results/html site/html
-          cp -r test-results/junit site/junit
-          cp uvicorn.log site/ 2>/dev/null || true
+          mkdir -p public
+          echo "<html><head><meta charset='utf-8'><title>AI-QA-Starter Report</title></head><body>" > public/index.html
+          echo "<h1>AI-QA-Starter — CI Report (${GITHUB_REF_NAME})</h1>" >> public/index.html
+          echo "<p>Commit: ${GITHUB_SHA}</p>" >> public/index.html
+          echo "<h3>Logs</h3><pre>" >> public/index.html
+          tail -n 500 uvicorn.log >> public/index.html || true
+          echo "</pre></body></html>" >> public/index.html
 
-      - name: Upload logs/artifacts (zip)
-        if: always()
+      - name: Upload report artifact (branch-scoped)
         uses: actions/upload-artifact@v4
         with:
-          name: logs-and-reports
-          path: |
-            uvicorn.log
-            test-results/**
-          if-no-files-found: ignore
+          name: web-report-${{ github.ref_name }}
+          path: public
+          if-no-files-found: warn
 
-      - name: Upload Pages artifact
-        uses: actions/upload-pages-artifact@v3
-        with:
-          path: site
+      - name: Job Summary (links)
+        run: |
+          echo "## CI Outputs — \`${{ github.ref_name }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- 🔗 **Report artifact**: \`web-report-${{ github.ref_name }}\` (see Artifacts panel)" >> $GITHUB_STEP_SUMMARY
 
-  publish-report:
-    name: Publish Web Report (GitHub Pages)
-    needs: test-all
+  deploy-pages:
+    name: Deploy GitHub Pages (master only)
+    if: github.ref == 'refs/heads/master'
+    needs: test-and-build
     runs-on: ubuntu-22.04
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Download report artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-report-master
+          path: ./public
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact for Pages
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./public
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
