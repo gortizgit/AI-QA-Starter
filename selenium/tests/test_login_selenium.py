@@ -1,4 +1,6 @@
 import os
+from pathlib import Path
+import sys
 
 import pytest
 from selenium import webdriver
@@ -7,7 +9,9 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.support.ui import WebDriverWait
 
-from selenium.pages.login_page import LoginPage
+# --- ensure local selenium/pages package (not PyPI selenium) is importable
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # adds .../selenium/
+from pages.login_page import LoginPage  # noqa: E402
 
 BASE_URL = os.getenv("BASE_URL", "http://127.0.0.1:8000")
 
