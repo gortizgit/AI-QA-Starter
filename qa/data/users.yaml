@@ -1,0 +1,6 @@
+valid:
+  username: demo
+  password: P@ssw0rd
+invalid:
+  username: demo
+  password: bad

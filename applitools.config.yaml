@@ -1,0 +1,6 @@
+# Set your API key via env var: APPLITOOLS_API_KEY=xxxxx
+applitools:
+  api_key: ${APPLITOOLS_API_KEY}
+  server_url: https://eyesapi.applitools.com
+  app_name: AI-QA-Starter
+  batch_name: Local Dev

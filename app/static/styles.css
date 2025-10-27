@@ -1,0 +1,6 @@
+body{font-family:system-ui,Segoe UI,Roboto,Arial;margin:0;background:#0e0f14;color:#e8e8e8}
+.card{max-width:380px;margin:10vh auto;padding:24px;background:#171923;border-radius:16px;box-shadow:0 10px 30px rgba(0,0,0,.35)}
+label{display:block;margin:12px 0}
+input{width:100%;padding:10px;border-radius:12px;border:1px solid #333;background:#0e0f14;color:#eee}
+button{width:100%;padding:12px;border:0;border-radius:12px;background:#5b8cfa;color:#fff;font-weight:600;cursor:pointer}
+pre{white-space:pre-wrap;background:#0e0f14;padding:12px;border-radius:12px;border:1px dashed #333}
