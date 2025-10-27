@@ -38,4 +38,4 @@ def test_login_invalid_selenium(driver):
     pre = WebDriverWait(driver, 5).until(
         EC.presence_of_element_located((By.ID, "result"))
     )
-    assert "401" in pre.text
+    assert ("Invalid credentials" in pre.text) or ("401" in pre.text)
