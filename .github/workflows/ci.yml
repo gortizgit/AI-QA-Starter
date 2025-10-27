@@ -7,7 +7,6 @@ on:
     branches: [ master, develop ]
   workflow_dispatch: {}
 
-# Necesario para publicar en GitHub Pages
 permissions:
   contents: read
   pages: write
@@ -20,7 +19,7 @@ concurrency:
 jobs:
   test-all:
     name: Lint + Unit + API + E2E (Playwright) + Selenium + VisualAI
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04   # ← evita issues de noble/24.04
     timeout-minutes: 45
 
     env:
@@ -48,8 +47,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt || true
           pip install pytest-html
+          # asegúrate de tener playwright instalado (por si no está en requirements.txt)
+          pip install playwright
 
-      # Cache de browsers de Playwright (acelera corridas siguientes)
+      # Cache de browsers Playwright (evita re-descargas en runs siguientes)
       - name: Cache Playwright browsers
         uses: actions/cache@v4
         with:
@@ -58,11 +59,12 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-msplaywright-
 
-      # Instala dependencias del sistema + browsers de Playwright de forma optimizada
-      - name: Setup Playwright (deps + browsers)
-        uses: microsoft/playwright-github-action@v1
+      # Instalar browsers y deps del sistema con el CLI oficial (soportado)
+      - name: Install Playwright browsers (CLI)
+        run: |
+          python -m playwright install --with-deps
 
-      # Chrome rápido (evita apt-get pesado)
+      # Chrome rápido (sin apt pesado)
       - name: Setup Chrome (fast)
         uses: browser-actions/setup-chrome@v1
         with:
@@ -82,7 +84,6 @@ jobs:
             fi
             sleep 1
           done
-          # falla si no respondió
           curl -sSf http://127.0.0.1:8000 > /dev/null
 
       # === TESTS + REPORTES HTML (para publicar luego en Pages) ===
@@ -163,7 +164,7 @@ jobs:
   publish-report:
     name: Publish Web Report (GitHub Pages)
     needs: test-all
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
